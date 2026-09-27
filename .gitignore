@@ -23,3 +23,6 @@ test_data/*
 # local installs created by setup.sh / setup.ps1
 .venv/
 local_data/
+
+# macOS folder metadata
+.DS_Store
