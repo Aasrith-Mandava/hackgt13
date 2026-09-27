@@ -23,7 +23,7 @@ Every integration is optional (the app runs without its key), sends only de-iden
 
 | Track | What it does in Insight Rx | Code | Switch on with |
 |---|---|---|---|
-| **Backboard** | **Copilot with persistent memory.** A base assistant holds Insight Rx's knowledge (therapy classes, interactions, protein targets with AlphaFold insights, CMS rules). Each clinician gets a private clone, so memory learns *their* preferences and follow-ups; there is one thread per patient; `/copilot` shows and deletes memories. | `copilot.py`, `routes_copilot.py` | `BACKBOARD_API_KEY` |
+| **Backboard** | **Copilot with persistent memory.** A base assistant holds Insight Rx's knowledge (therapy classes, interactions, protein targets with AlphaFold insights, CMS rules). Each clinician gets a private clone, so memory learns *their* preferences and follow-ups; there is one thread per patient; `/copilot` shows and deletes memories. Backboard handles memory (extraction and recall); the matching knowledge passages are retrieved locally and **Gemini writes the cited answer**, so the copilot runs without Backboard LLM credits. | `copilot.py`, `routes_copilot.py` | `BACKBOARD_API_KEY` + `GEMINI_API_KEY` |
 | **Gemini API** | **Patient explainer.** Gemini 3.8 Flash rewrites the screening result as a warm, plain-language note in **English or Brazilian Portuguese**. Output that adds numbers or identifiers, or drops facts, is rejected and the deterministic template is shown. Gemini also drafts guideline evidence briefs. | `explainer.py`, `llm.py` | `GEMINI_API_KEY` |
 | **ElevenLabs** | **Read-aloud for patients.** The explainer is spoken with the multilingual voice model, for patients with low literacy or low vision, which is common in diabetic eye disease. Audio is cached per text. | `explainer.py`, `routes_explainer.py` | `ELEVENLABS_API_KEY` |
 | **Solana** | **Tamper-evident signatures.** Each signed review and sent consultation package writes its SHA-256 digest (only the digest) to the Solana Memo program. The audit trail links to Solana Explorer, so anyone can prove a record existed unchanged at that time without trusting our database. | `anchor.py` | `SOLANA_ANCHOR_KEYPAIR` (devnet) |
@@ -43,7 +43,7 @@ For the Impiricus challenge: memory turns one-off answers into an ongoing HCP re
 | **Patient explainer (Gemini + ElevenLabs)** | **Finding trends (Tiger Data)** | **Audit trail (Solana)** |
 | ![](docs/screenshots/28_patient_explainer_pt.png) | ![](docs/screenshots/29_finding_trends.png) | ![](docs/screenshots/30_audit_trail_solana.png) |
 
-All 30 screens are in [docs/screenshots](docs/screenshots/), and the [user guide](docs/USER_GUIDE.md) walks through them.
+All 31 screens are in [docs/screenshots](docs/screenshots/), and the [user guide](docs/USER_GUIDE.md) walks through them.
 
 ## How it works
 
