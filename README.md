@@ -6,7 +6,7 @@
 
 [![Watch the Insight Rx demo (3:09)](docs/demo/InsightRx_CodePaws_poster.jpg)](docs/demo/InsightRx_CodePaws_demo.mp4)
 
-**▶ [Watch the demo video](docs/demo/InsightRx_CodePaws_demo.mp4)** (3:09, a live walkthrough of the deployed app with every feature and each sponsor integration; narrated and captioned; [captions .srt](docs/demo/InsightRx_CodePaws_demo.srt) · [script](docs/demo/InsightRx_CodePaws_demo_script.md)) · **[Live app](https://insightrx-hcp.vercel.app)** (access code on request) · **[User guide](docs/USER_GUIDE.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Impiricus fit and judging scorecard](docs/IMPIRICUS_FIT.md)** · **[Sample PDF reports](docs/reports/)** · **[Portable inference (ONNX)](docs/PORTABLE_INFERENCE.md)**
+**▶ [Watch the demo video](docs/demo/InsightRx_CodePaws_demo.mp4)** (3:09, a live walkthrough of the deployed app with every feature and integration, and the approach behind them; narrated and captioned; [captions .srt](docs/demo/InsightRx_CodePaws_demo.srt) · [script](docs/demo/InsightRx_CodePaws_demo_script.md)) · **[Live app](https://insightrx-hcp.vercel.app)** (access code on request) · **[User guide](docs/USER_GUIDE.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Impiricus fit and judging scorecard](docs/IMPIRICUS_FIT.md)** · **[Sample PDF reports](docs/reports/)** · **[Portable inference (ONNX)](docs/PORTABLE_INFERENCE.md)**
 
 ### Why it wins
 
