@@ -11,7 +11,7 @@ Insight Rx turns one portable retinal photo into:
 This document covers how the pieces fit together, where the data comes from, and how privacy and safety are enforced.
 
 - **Live app:** https://insightrx-hcp.vercel.app. It is protected by an access code because it shows credentialed mBRSET images.
-- **Code:** https://github.com/Aasrith-Mandava/hackgt13
+- **Code:** https://github.com/Aasrith-Mandava/insight-rx
 - **Team:** CodePaws (HackGT 13): Aasrith Mandava.
 
 ---
@@ -222,7 +222,7 @@ erDiagram
 
 ```mermaid
 flowchart LR
-  GH["GitHub<br/>Aasrith-Mandava/hackgt13"] -->|vercel deploy --prod| V["Vercel project insightrx<br/>api/index.py → FastAPI"]
+  GH["GitHub<br/>Aasrith-Mandava/insight-rx"] -->|vercel deploy --prod| V["Vercel project insightrx<br/>api/index.py → FastAPI"]
   V <--> N[("Neon Postgres")]
   W["scripts/run_vision_tunnel.sh<br/>uvicorn insightrx.vision_api + cloudflared"] -->|POST /api/vision/register| V
   V -->|HTTPS + key| W
