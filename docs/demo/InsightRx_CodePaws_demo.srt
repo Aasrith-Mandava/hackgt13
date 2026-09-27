@@ -1,0 +1,92 @@
+1
+00:00:00,350 --> 00:00:06,020
+This heatmap came from a phone photo of a real patient's eye, read live by our model moments ago.
+
+2
+00:00:06,871 --> 00:00:15,691
+I'm Aasrith Mandava from team CodePaws. Insight Rx turns one eye photo into what to treat, which drug to target, and who to engage.
+
+3
+00:00:16,247 --> 00:00:25,957
+Built at HackGT 13: FastAPI on Vercel and Neon, retinal models on a live GPU through a Cloudflare tunnel, and five sponsor integrations.
+
+4
+00:00:26,513 --> 00:00:34,703
+Every role sees only what it should, from screeners to specialists to a manufacturer desk. I'm Dr. Alex Morgan, primary care.
+
+5
+00:00:35,257 --> 00:00:43,307
+Two phone photos of the retina, the patient's age and medicines, and our fine-tuned DINOv2 ensemble reads them on a live GPU.
+
+6
+00:00:43,877 --> 00:00:53,667
+After a quality gate: referable diabetic retinopathy in both eyes, with grades, an edema signal, and an AUROC of 0.98 on unseen patients.
+
+7
+00:00:54,216 --> 00:01:00,546
+The same photos score heart, kidneys, nerves and metabolism, each with its evidence tier and what moved it.
+
+8
+00:01:01,101 --> 00:01:07,971
+Guideline therapy follows, with eye-specific alerts: semaglutide with retinopathy, pioglitazone with edema.
+
+9
+00:01:08,526 --> 00:01:15,666
+Then personalised protein targets. The top one, VEGF-A, opens in its real PDB structure.
+
+10
+00:01:21,446 --> 00:01:27,216
+Flip to AlphaFold, and the 21 drug-contact residues score 95 out of 100.
+
+11
+00:01:27,771 --> 00:01:33,381
+The explorer and portfolio report show pharma where eye-detected demand meets open drug space.
+
+12
+00:01:33,936 --> 00:01:42,806
+One click saves the patient: confirm the reading, pick the specialist, then sign and send a package sealed with a SHA-256 signature.
+
+13
+00:01:43,411 --> 00:01:47,501
+The retina specialist accepts, and the relay hands the case to the coordinator.
+
+14
+00:01:49,366 --> 00:01:54,896
+Outside the network? Real clinicians from the CMS NPI Registry, with a referral letter.
+
+15
+00:01:55,450 --> 00:02:01,380
+Manufacturer questions cross a firewall: the desk sees an age band and findings, never the patient.
+
+16
+00:02:02,440 --> 00:02:10,220
+Now the sponsors, live. The Copilot's memory runs on Backboard, and Gemini writes a cited answer that uses my own follow-up habit.
+
+17
+00:02:11,645 --> 00:02:17,355
+Gemini rewrites the result for the patient in English or Portuguese, and ElevenLabs reads it aloud.
+
+18
+00:02:21,879 --> 00:02:27,979
+Every screening streams de-identified findings into a Tiger Data hypertable with a continuous aggregate.
+
+19
+00:02:28,536 --> 00:02:35,646
+Each physician-read screen closes a CMS eye-exam gap and bills CPT 92228.
+
+20
+00:02:36,199 --> 00:02:42,179
+And every signature lands in an append-only audit trail, ready to anchor on Solana's Memo program.
+
+21
+00:02:42,737 --> 00:02:52,337
+Per ten thousand patients: about 3,500 exam gaps closed, $300,000 in billable reads, and 2,600 people with retinopathy found.
+
+22
+00:02:52,891 --> 00:03:01,771
+Gemini explains, ElevenLabs speaks, Backboard remembers, Tiger Data tracks, Solana proves, and Grok voiced this video.
+
+23
+00:03:02,331 --> 00:03:08,301
+Insight Rx, by team CodePaws: one eye photo, the right therapy, the right physician.
+

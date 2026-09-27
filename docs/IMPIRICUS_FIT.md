@@ -12,7 +12,7 @@
 The engagement happens when the therapy decision is made, inside the clinician's workflow. It is not a message pushed to a phone.
 
 Team **CodePaws** (HackGT 13): Aasrith Mandava.
-Demo video: [docs/demo/InsightRx_demo.mp4](demo/InsightRx_demo.mp4) · Live: https://insightrx-hcp.vercel.app
+Demo video (3:09): [docs/demo/InsightRx_CodePaws_demo.mp4](demo/InsightRx_CodePaws_demo.mp4) · [script](demo/InsightRx_CodePaws_demo_script.md) · Live: https://insightrx-hcp.vercel.app
 
 ## Rules check
 
