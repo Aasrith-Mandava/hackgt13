@@ -1,10 +1,10 @@
 1
 00:00:00,350 --> 00:00:03,061
-Hi! We're team Coding Claws, at HackGT 13.
+Hi! We're team CodePaws, at HackGT 13.
 
 2
 00:00:03,061 --> 00:00:09,280
-I'm Aasrith Mandava, with Sahith Reddy Thummala, Pranav Nagothu and Geethanjali Nagaboina.
+I'm Aasrith Mandava.
 
 3
 00:00:09,130 --> 00:00:14,571

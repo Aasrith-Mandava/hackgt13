@@ -36,9 +36,9 @@ def roi_numbers(r=ROI):
 
 
 SCENES = [
-    {"id": "title", "slide": "title", "badges": ["Team Coding Claws · HackGT 13 · Impiricus challenge"],
-     "say": [("Hi! We're team Coding Claws at HackGT 13: Aasrith Mandava, Sahith Reddy Thummala, Pranav Nagothu and Geethanjali Nagaboina.",
-              "Hi! We're team Coding Claws, at HackGT thirteen. I'm Aasrith Mandava, with Saa-hith Reddy Thoo-mala, Pra-nuv Naa-go-thoo, and Geeth-aanjali Naa-ga-boyna."),
+    {"id": "title", "slide": "title", "badges": ["Team CodePaws · HackGT 13 · Impiricus challenge"],
+     "say": [("Hi! We're team CodePaws at HackGT 13: Aasrith Mandava.",
+              "Hi! We're team CodePaws, at HackGT thirteen. I'm Aasrith Mandava."),
              ("This is Insight Rx, a new HCP engagement channel triggered by a clinical signal. One no-needle eye photo tells the clinician what to treat, which protein and drug to target, and who to engage next.",
               "And this is Insight R-X. It's a new way to engage H-C-Ps, triggered by a clinical signal. One simple, no-needle eye photo tells the clinician what to treat, which protein and drug to target, and who to talk to next.")]},
 
@@ -149,8 +149,6 @@ SCENES = [
 
 # Spoken-form spellings (for the voice) mapped back to how they're written (for captions)
 CAPTION_FORMS = [
-    ("I'm Aasrith Mandava, with Saa-hith Reddy Thoo-mala, Pra-nuv Naa-go-thoo, and Geeth-aanjali Naa-ga-boyna",
-     "I'm Aasrith Mandava, with Sahith Reddy Thummala, Pranav Nagothu and Geethanjali Nagaboina"),
     ("Insight R-X", "Insight Rx"), ("H-C-Ps", "HCPs"), ("H-C-P", "HCP"), ("Dino-V-two", "DINOv2"), ("V-E-G-F A", "VEGF-A"),
     ("the Kem-B-L database", "ChEMBL"), ("S-G-L-T-two", "SGLT2"), ("C-M-S N-P-I registry", "CMS NPI Registry"),
     ("C-P-T ninety-two, two twenty-eight", "CPT 92228"), ("Fast-A-P-I", "FastAPI"), ("G-P-U", "GPU"),

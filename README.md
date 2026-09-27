@@ -2,11 +2,11 @@
 
 > **Insight Rx is a new HCP engagement channel triggered by a clinical signal: one no-needle eye photo tells the clinician what to treat, which protein and drug to target, and who to engage next (a specialist, a trial or the manufacturer).**
 
-**HackGT 13 · Impiricus challenge: "Invent the next way we engage HCPs."** Team **Coding Claws**: Aasrith Mandava, Sahith Reddy Thummala, Pranav Nagothu and Geethanjali Nagaboina.
+**HackGT 13 · Impiricus challenge: "Invent the next way we engage HCPs."** Team **CodePaws**: Aasrith Mandava.
 
 [![Watch the Insight Rx demo (5:35)](docs/demo/poster.jpg)](docs/demo/InsightRx_demo.mp4)
 
-**▶ [Watch the demo video](docs/demo/InsightRx_demo.mp4)** (5:35, narrated, captioned; [captions .srt](docs/demo/InsightRx_demo.srt)) · **[Live app](https://insightrx-hcp.vercel.app)** (access code on request) · **[User guide](docs/USER_GUIDE.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Impiricus fit and judging scorecard](docs/IMPIRICUS_FIT.md)** · **[Sample PDF reports](docs/reports/)**
+**▶ [Watch the demo video](docs/demo/InsightRx_demo.mp4)** (5:35, narrated, captioned; [captions .srt](docs/demo/InsightRx_demo.srt)) · **[Live app](https://insightrx-hcp.vercel.app)** (access code on request) · **[User guide](docs/USER_GUIDE.md)** · **[Architecture](docs/ARCHITECTURE.md)** · **[Impiricus fit and judging scorecard](docs/IMPIRICUS_FIT.md)** · **[Sample PDF reports](docs/reports/)** · **[Portable inference (ONNX)](docs/PORTABLE_INFERENCE.md)**
 
 ### Why it wins
 
@@ -14,8 +14,22 @@
 |---|---|
 | **Impact on the HCP** | At the moment of decision, one photo gives a referable-DR verdict with attention maps, a whole-body view, guideline therapy with eye-specific drug-safety alerts, ranked protein targets, trials, and a one-click consult or referral letter. It also closes the diabetic eye-exam quality gap the clinician is measured on. |
 | **Originality** | Screening tools stop at "refer". Insight Rx carries the retinal phenotype to the **protein target, drug and physician for each patient**, and measures **AlphaFold confidence at the exact drug-contact residues** from real PDB complexes. |
-| **Technical execution** | DINOv2-L + LoRA ensemble trained on real Brazilian portable-camera data: **AUROC 0.980** on held-out patients. Live GPU worker, FastAPI on Vercel with Neon, strict CSP, tenant and role isolation, audit trail, 44 tests, and a reproducible demo pipeline. |
+| **Technical execution** | DINOv2-L + LoRA ensemble trained on real Brazilian portable-camera data: **AUROC 0.980** on held-out patients. Live GPU worker, FastAPI on Vercel with Neon, strict CSP, tenant and role isolation, audit trail, 84 tests, and a reproducible demo pipeline. |
 | **Commercial fit** | **Manufacturers** pay per qualified med-info engagement and trial referral, inside a compliance firewall. **Clinics** pay per screen, offset by CPT 92228 reads (about $30 each) and quality bonuses. **Impiricus** gains a non-SMS channel on its HCP network plus eye-detected demand per protein target. Per 10,000 patients: 3,520 exam gaps closeable, about $304K in billable reads, and 2,600 people with retinopathy found. |
+
+### MLH prize tracks
+
+Every integration is optional (the app runs without its key), sends only de-identified data, and is covered by tests.
+
+| Track | What it does in Insight Rx | Code | Switch on with |
+|---|---|---|---|
+| **Backboard** | **Copilot with persistent memory.** A base assistant holds Insight Rx's knowledge (therapy classes, interactions, protein targets with AlphaFold insights, CMS rules). Each clinician gets a private clone, so memory learns *their* preferences and follow-ups; there is one thread per patient; `/copilot` shows and deletes memories. | `copilot.py`, `routes_copilot.py` | `BACKBOARD_API_KEY` |
+| **Gemini API** | **Patient explainer.** Gemini 3.8 Flash rewrites the screening result as a warm, plain-language note in **English or Brazilian Portuguese**. Output that adds numbers or identifiers, or drops facts, is rejected and the deterministic template is shown. Gemini also drafts guideline evidence briefs. | `explainer.py`, `llm.py` | `GEMINI_API_KEY` |
+| **ElevenLabs** | **Read-aloud for patients.** The explainer is spoken with the multilingual voice model, for patients with low literacy or low vision, which is common in diabetic eye disease. Audio is cached per text. | `explainer.py`, `routes_explainer.py` | `ELEVENLABS_API_KEY` |
+| **Solana** | **Tamper-evident signatures.** Each signed review and sent consultation package writes its SHA-256 digest (only the digest) to the Solana Memo program. The audit trail links to Solana Explorer, so anyone can prove a record existed unchanged at that time without trusting our database. | `anchor.py` | `SOLANA_ANCHOR_KEYPAIR` (devnet) |
+| **Tiger Data** | **Finding trends.** Every screening emits de-identified finding events (referable DR, edema, each systemic signal) and workflow events into a TimescaleDB **hypertable**, rolled up by a real-time **continuous aggregate**. This is the "eye-detected demand per target over time" series (Performance → Finding trends). | `timeseries.py` | `TIGER_DATABASE_URL` |
+
+For the Impiricus challenge: memory turns one-off answers into an ongoing HCP relationship; the explainer and voice extend the moment of care to the patient; anchoring makes signed clinical records verifiable; and the trend series is the demand signal manufacturers pay for.
 
 ### Screenshots
 
@@ -26,8 +40,10 @@
 | ![](docs/screenshots/06_target_vegfa_complex.png) | ![](docs/screenshots/13_case_therapy_trials.png) | ![](docs/screenshots/25_medinfo_manufacturer_desk.png) |
 | **NPI Registry referral** | **CMS quality and billing** | **Model performance** |
 | ![](docs/screenshots/15_refer_out_npi_registry.png) | ![](docs/screenshots/19_cms_quality_billing.png) | ![](docs/screenshots/20_model_performance.png) |
+| **Patient explainer (Gemini + ElevenLabs)** | **Finding trends (Tiger Data)** | **Audit trail (Solana)** |
+| ![](docs/screenshots/28_patient_explainer_pt.png) | ![](docs/screenshots/29_finding_trends.png) | ![](docs/screenshots/30_audit_trail_solana.png) |
 
-All 26 screens are in [docs/screenshots](docs/screenshots/), and the [user guide](docs/USER_GUIDE.md) walks through them.
+All 30 screens are in [docs/screenshots](docs/screenshots/), and the [user guide](docs/USER_GUIDE.md) walks through them.
 
 ## How it works
 
@@ -209,6 +225,10 @@ The database seeds itself with the synthetic workspace (no images) on first star
 
 Alternative, paid: `python scripts/deploy_space.py` builds a Hugging Face Docker Space from `deploy/space/` (needs HF PRO plus T4 hardware).
 
+### Run on another device (ONNX, no PyTorch)
+
+`python scripts/export_models.py` writes a self-contained ONNX bundle. It contains the LoRA-merged retina models, the systemic encoders and heads, calibration, a manifest with checksums, and a PyTorch-vs-ONNX parity report. Install `requirements-runtime.txt` on any device (CPU, NVIDIA, Apple Silicon or Windows DirectML) and set `INSIGHTRX_MODEL_DIR` to the bundle; `VisionService`, `scripts/predict.py` and the vision worker switch to ONNX Runtime automatically. Verdicts and systemic scores are identical to PyTorch (probabilities within 5e-7). See [docs/PORTABLE_INFERENCE.md](docs/PORTABLE_INFERENCE.md).
+
 ### Test on new retinal images
 
 - **In the app: Try an image.** Upload up to 4 fundus photos to see the quality gate result, DR score against the frozen threshold, grade probabilities, edema signal and attention map. Nothing is stored. Large phone or camera photos are downscaled in the browser so they fit the upload limit.
@@ -246,6 +266,7 @@ The tests cover:
 - **Consultations:** a double-submitted referral creates only one referral; illegal state transitions are rejected; a signature is invalidated when the case changes; the recipient must be granted access.
 - **Safety:** unusable or one-eye cases never produce a reassuring result; the Gemini payload guard works.
 - **Full handoff:** a complete two-HCP exchange from send to close.
+- **MLH integrations:** the Solana memo carries only a digest and is a valid signed transaction; Gemini output that adds numbers or identifiers falls back to the template; ElevenLabs audio is cached and fails safely; Tiger events are de-identified and never break a request.
 
 ## Layout
 
@@ -253,13 +274,13 @@ The tests cover:
 insightrx/ml/    config, data, model, train_image, evaluate, frozen, systemic_cv, explain (train_systemic: P1-split reference)
 insightrx/app/   main (routes), routes_therapy, therapeutics, personalize, external, reports, models, workflow (state machine / audit / tasks), vision, remote_vision, seed, llm, evidence, templates/
 insightrx/vision_api.py  GPU vision worker API (used by the deployed app through the tunnel)
-scripts/        JobSubmit.sh, train_local.sh, seed_demo.py, run_app.sh, run_vision_tunnel.sh, deploy_space.py, fetch_structures.py
+scripts/        JobSubmit.sh, train_local.sh, seed_demo.py, run_app.sh, run_vision_tunnel.sh, deploy_space.py, fetch_structures.py, export_models.py (portable ONNX bundle)
 scripts/demo/   narrated demo video pipeline (Microsoft VibeVoice voice + Whisper alignment, Playwright recording, ffmpeg captions) + screenshots.py
 api/, vercel.json  Vercel entry point + config (requirements.txt = web app deps; requirements-ml.txt = models)
 deploy/space/   Dockerfile + pinned requirements for the Hugging Face Space
 weights/        released checkpoints (Git LFS) + calibration + aggregate metrics
 tests/          test_workflow.py, test_therapeutics.py
-docs/           USER_GUIDE, ARCHITECTURE, IMPIRICUS_FIT, screenshots/, reports/ (sample PDFs), demo/ (video via Git LFS, captions, slides)
+docs/           USER_GUIDE, ARCHITECTURE, IMPIRICUS_FIT, PORTABLE_INFERENCE, screenshots/, reports/ (sample PDFs), demo/ (video via Git LFS, captions, slides)
 ```
 
 ## Limitations

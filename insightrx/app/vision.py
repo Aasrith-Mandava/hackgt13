@@ -48,6 +48,55 @@ def sigmoid(z):
     return 1 / (1 + np.exp(-z))
 
 
+def logit(s):
+    """Column of log-odds (the Platt calibrators' input); same as insightrx.ml.systemic_cv.logit."""
+    s = np.clip(s, 1e-6, 1 - 1e-6)
+    return np.log(s / (1 - s))[:, None]
+
+
+def ordinal_probs(z):
+    """CORAL cumulative logits -> class probabilities (NumPy; same as insightrx.ml.model.ordinal_probs_np)."""
+    p_gt = np.minimum.accumulate(sigmoid(z), axis=-1)
+    return np.clip(np.concatenate([1 - p_gt[..., :1], p_gt[..., :-1] - p_gt[..., 1:], p_gt[..., -1:]], -1), 0, 1)
+
+
+def split_heads(logits, heads):
+    """Concatenated logits [N, sum k] -> {head: array} for heads [(name, type, k, ...)]."""
+    out, c = {}, 0
+    for name, _, k, *_ in heads:
+        out[name] = logits[:, c] if k == 1 else logits[:, c:c + k]
+        c += k
+    return out
+
+
+def ort_providers():
+    """Best available ONNX Runtime execution providers (override with INSIGHTRX_ORT_PROVIDERS=a,b)."""
+    import onnxruntime as ort
+    want = os.environ.get("INSIGHTRX_ORT_PROVIDERS")
+    if want:
+        return want.split(",")
+    avail = ort.get_available_providers()
+    order = ["CUDAExecutionProvider", "CoreMLExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]
+    return [p for p in order if p in avail] or ["CPUExecutionProvider"]
+
+
+class OnnxEncoder:
+    """Frozen systemic encoder exported to ONNX; same interface as insightrx.ml.frozen.FrozenEncoder.encode."""
+
+    def __init__(self, path, size, draft, providers, opts=None):
+        import onnxruntime as ort
+        self.size, self.draft = size, draft
+        self.session = ort.InferenceSession(path, sess_options=opts, providers=providers)
+
+    def encode(self, paths, device=None, batch=8):
+        from insightrx.ml.preprocess import preprocess
+        out = []
+        for i in range(0, len(paths), batch):
+            x = np.stack([preprocess(p, self.size, draft=self.draft) for p in paths[i:i + batch]])
+            out.append(self.session.run(None, {"pixel_values": x})[0])
+        return np.concatenate(out)
+
+
 def _to_rgb(img):
     """Flatten palette/alpha/greyscale images onto black (fundus background) as RGB."""
     if img.mode in ("RGBA", "LA", "P"):
@@ -77,6 +126,7 @@ def suitability(path):
 
 
 class VisionService:
+    is_async = False                                    # local models answer synchronously
     def __init__(self, model_dir=MODEL_DIR):
         self.model_dir = model_dir
         self.lock = threading.Lock()
@@ -86,10 +136,13 @@ class VisionService:
         self.metrics = {}
         self.mode = "simulated"
         self.version = "simulated-v0"
+        self.backend = None
         self._load()
 
     # -------------------------------------------------------------- loading
     def _load(self):
+        if os.path.exists(os.path.join(self.model_dir, "manifest.json")):
+            return self._load_onnx()
         cal = os.path.join(self.model_dir, "calibration.json")
         ckpts = sorted(glob.glob(os.path.join(self.model_dir, "ckpt", "image_seed*.pth")))
         if not (os.path.exists(cal) and ckpts):
@@ -124,10 +177,48 @@ class VisionService:
             if os.path.exists(p):
                 self.metrics[name] = json.load(open(p))
         self.mode = "live"
+        self.backend = "torch"
         self.version = f"insightrx-dinov2L-lora-ens{len(self.models)}-{h.hexdigest()[:10]}"
+
+    def _load_onnx(self):
+        """Portable bundle from scripts/export_models.py: ONNX Runtime on CPU / CUDA / CoreML / DirectML, no PyTorch."""
+        import joblib
+        import onnxruntime as ort
+        man = json.load(open(os.path.join(self.model_dir, "manifest.json")))
+        self.calib = json.load(open(os.path.join(self.model_dir, "calibration.json")))
+        self.providers = ort_providers()
+        opts = ort.SessionOptions()
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        if os.environ.get("INSIGHTRX_ORT_THREADS"):              # e.g. 2 on a free Hugging Face CPU Space
+            opts.intra_op_num_threads = int(os.environ["INSIGHTRX_ORT_THREADS"])
+            opts.inter_op_num_threads = 1
+        self.models = [ort.InferenceSession(os.path.join(self.model_dir, f), sess_options=opts, providers=self.providers)
+                       for f in man["retina"]["files"]]
+        self.heads = [(h["name"], h["type"], h["outputs"]) for h in man["retina"]["heads"]]
+        self.size = man["retina"]["image_size"]
+        self.device = self.models[0].get_providers()[0]
+        self.encoders = {bb: OnnxEncoder(os.path.join(self.model_dir, e["file"]), e["image_size"], e.get("jpeg_draft"),
+                                         self.providers, opts) for bb, e in man.get("encoders", {}).items()}
+        sp = os.path.join(self.model_dir, man["systemic"]["file"])
+        if os.path.exists(sp):
+            self.systemic = joblib.load(sp)
+            missing = {h["backbone"] for h in self.systemic["heads"].values() if h["backbone"]} - set(self.encoders)
+            for t, h in self.systemic["heads"].items():        # heads whose encoder was not exported are skipped
+                if h["backbone"] in missing:
+                    h["unavailable"] = f"encoder {h['backbone']} not in this bundle"
+        for name in ("image_metrics.json", "systemic_metrics.json", "systemic_cv.json"):
+            p = os.path.join(self.model_dir, "metrics", name)
+            if os.path.exists(p):
+                self.metrics[name] = json.load(open(p))
+        self.mode = "live"
+        self.backend = "onnx"
+        digest = hashlib.sha256("".join(man["sha256"].get(f, f) for f in man["retina"]["files"]).encode()).hexdigest()
+        self.version = f"insightrx-dinov2L-lora-ens{len(self.models)}-onnx-{digest[:10]}"
 
     # -------------------------------------------------------------- per-image inference
     def _infer(self, paths):
+        if self.backend == "onnx":
+            return self._infer_onnx(paths)
         import torch
         from insightrx.ml.data import eval_transform, open_fundus
         from insightrx.ml.model import split_logits
@@ -144,6 +235,19 @@ class VisionService:
                 logits.append(((z + zf) / 2).cpu().numpy())
                 embs.append(((g.float() + gf.float()) / 2).cpu().numpy())
         return split_logits(np.mean(logits, 0)), np.concatenate(embs, 1)
+
+    def _infer_onnx(self, paths):
+        """Same test-time augmentation as the PyTorch path: mean of image and horizontal flip, then across seeds."""
+        from insightrx.ml.preprocess import preprocess
+        x = np.stack([preprocess(p, self.size) for p in paths])
+        xf = np.ascontiguousarray(x[..., ::-1])
+        logits, embs = [], []
+        for s in self.models:
+            z, g = s.run(None, {"pixel_values": x})
+            zf, gf = s.run(None, {"pixel_values": xf})
+            logits.append((z + zf) / 2)
+            embs.append((g + gf) / 2)
+        return split_heads(np.mean(logits, 0), self.heads), np.concatenate(embs, 1)
 
     def _simulated(self, paths):
         out = []
@@ -187,10 +291,9 @@ class VisionService:
         if ok_imgs:
             with self.lock:
                 if self.mode == "live":
-                    from insightrx.ml.model import ordinal_probs_np
                     z, emb = self._infer([im["path"] for im in ok_imgs])
                     T = self.calib["temperatures"]
-                    icdr = ordinal_probs_np(z["icdr"])
+                    icdr = ordinal_probs(z["icdr"])
                     rows = [{"p_quality_poor": float(sigmoid(z["quality_poor"][i] / T["quality_poor"])),
                              "p_dr": float(sigmoid(z["dr_referable"][i] / T["dr_referable"])),
                              "p_edema": float(sigmoid(z["edema"][i] / T["edema"])),
@@ -274,6 +377,9 @@ class VisionService:
         out = {}
         for t, label in labels.items():
             h = self.systemic["heads"].get(t)
+            if h and h.get("unavailable"):
+                out[t] = {"label": label, "status": "Not evaluated", "reason": h["unavailable"]}
+                continue
             if not h:
                 out[t] = {"label": label, "status": "Not evaluated", "reason": "no model trained"}
                 continue
@@ -311,8 +417,6 @@ class VisionService:
 
     def _systemic_score(self, h, e, meta, explain=True):
         """Calibrated score and occlusion contributions (score change when a group is set to the cohort baseline)."""
-        from insightrx.ml.systemic_cv import logit
-
         def score(e_, m_):
             v = h["variant"]
             X = m_[None] if v == "metadata" else e_[None] if v.startswith("image:") else np.concatenate([e_, m_])[None]
@@ -335,13 +439,14 @@ class VisionService:
 
     # -------------------------------------------------------------- explanation maps
     def explain(self, path, head):
-        """PNG overlay of model attention for one image. head: 'dr_referable' | 'quality_poor' | 'edema' | systemic target."""
+        """PNG overlay of model attention for one image. head: 'dr_referable' | 'quality_poor' | 'edema' | systemic target.
+        Needs the PyTorch backend (gradients); returns None otherwise so callers simply omit the map."""
+        if self.mode != "live" or self.backend != "torch":     # checked before any torch import (CPU/ONNX installs)
+            return None
         import torch
         from PIL import Image as P
         from insightrx.ml.data import eval_transform, open_fundus
         from insightrx.ml.explain import overlay_png, patch_relevance, systemic_image_direction
-        if self.mode != "live":
-            return None
         if isinstance(path, (bytes, bytearray)):                  # database-stored image
             import tempfile
             with tempfile.NamedTemporaryFile(suffix=".img", delete=False) as fh:
@@ -373,13 +478,24 @@ class VisionService:
 
 
 _service = None
+_service_lock = threading.Lock()
+
+
+def service_ready():
+    """True once the models are loaded (never blocks)."""
+    return _service is not None
 
 
 def get_service():
     """Local models by default; INSIGHTRX_VISION=remote uses a vision worker over HTTP (e.g. from Vercel).
-    If the models cannot be loaded (missing weights, GPU out of memory) the app keeps running in SIMULATED mode."""
+    If the models cannot be loaded (missing weights, GPU out of memory) the app keeps running in SIMULATED mode.
+    Thread-safe: concurrent requests during the first load wait for it instead of loading their own copy."""
     global _service
-    if _service is None:
+    if _service is not None:
+        return _service
+    with _service_lock:
+        if _service is not None:
+            return _service
         if os.environ.get("INSIGHTRX_VISION") == "remote":
             from .remote_vision import RemoteVisionService
             _service = RemoteVisionService()

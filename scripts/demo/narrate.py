@@ -135,8 +135,6 @@ class VibeVoice:
 # VibeVoice is language-model based and reads natural written text best: undo the letter-by-letter spellings that
 # help sentence-level engines, but keep spoken-out numbers and plain-English expansions.
 VV_FORMS = [
-    ("I'm Aasrith Mandava, with Saa-hith Reddy Thoo-mala, Pra-nuv Naa-go-thoo, and Geeth-aanjali Naa-ga-boyna",
-     "I'm Aasrith Mandava, with Sahith Reddy Thummala, Pranav Nagothu, and Geethanjali Nagaboina"),
     ("Insight R-X", "Insight Rx"), ("H-C-Ps", "HCPs"), ("H-C-P", "HCP"), ("Dino-V-two", "DINO v2"), ("V-E-G-F A", "VEGF-A"),
     ("the Kem-B-L database", "the ChEMBL database"), ("S-G-L-T-two", "SGLT2"), ("C-M-S N-P-I registry", "CMS NPI Registry"),
     ("C-P-T ninety-two, two twenty-eight", "CPT ninety-two, two twenty-eight"), ("Fast-A-P-I", "FastAPI"), ("G-P-U", "GPU"),

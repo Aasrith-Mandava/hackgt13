@@ -20,6 +20,6 @@ skills-lock.json
 test_data/*
 !test_data/README.md
 
-# local virtualenv
+# local installs created by setup.sh / setup.ps1
 .venv/
-.DS_Store
+local_data/

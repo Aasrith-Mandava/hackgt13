@@ -23,10 +23,12 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import workflow as wf
 from .db import APP_ROOT, IMAGE_STORE, Base, SessionLocal, engine, ensure_columns, get_db
 from . import activity as act
+from . import anchor
 from . import consult
 from . import oculomics as oc
 from . import personalize
 from . import therapeutics as tx
+from . import timeseries
 from . import trylab
 from .llm import draft_package, evidence_brief
 from .models import (AppSetting, AuditEvent, Barrier, Case, Image, Message, ModelRun, Notification, Patient, Referral, Review,
@@ -103,6 +105,8 @@ templates.env.globals.update(ICDR_NAMES=ICDR_NAMES, SYSTEMIC_LABELS=SYSTEMIC_LAB
                              COMMON_MEDS=tx.common_meds())
 templates.env.filters["dt"] = fmt_dt
 templates.env.filters["due"] = fmt_due
+templates.env.filters["solana_tx"] = anchor.tx_in
+templates.env.globals["solana_explorer"] = anchor.explorer_url
 
 
 @app.middleware("http")
@@ -262,6 +266,7 @@ def inbox(request: Request, filter: str = "", user: User = Depends(current_user)
         cases = db.scalars(select(Case).where(Case.owner_id == user.id).order_by(Case.id.desc())).all()
     else:
         cases = []
+    settle_cases(db, [c.id for c in cases])
     if filter == "incomplete":
         cases = [c for c in cases if c.status in ("Draft", "Images ready", "Unable to assess")]
     results = {}
@@ -565,28 +570,128 @@ def patient_meta(p: Patient):
             "insulin": yn.get(p.insulin), "oraltreatment_dm": yn.get(p.oral_treatment)}
 
 
-def run_analysis(db: Session, case: Case, user: User) -> ModelRun:
-    imgs = wf.active_images(db, case)
+def _case_images(imgs):
+    return [{"id": i.id, "path": i.path, "laterality": i.laterality, **({} if i.path else {"bytes": image_bytes(i)})}
+            for i in imgs]
+
+
+def _case_inputs(case):
+    return {k: (v if v is not None else float("nan")) for k, v in patient_meta(case.patient).items()}
+
+
+def remap_result(res, id_map):
+    """Re-key a result computed on Screen photo numbers onto the saved case's image ids."""
+    if not id_map:
+        return res
+    m = {str(k): str(v) for k, v in id_map.items()}
+    out = dict(res)
+    out["images"] = {m.get(str(k), str(k)): v for k, v in (res.get("images") or {}).items()}
+    out["unknown_laterality"] = [int(m.get(str(i), i)) for i in res.get("unknown_laterality", [])]
+    sysd = {}
+    for t, h in (res.get("systemic") or {}).items():
+        h = dict(h)
+        if h.get("per_image"):
+            h["per_image"] = {m.get(str(k), str(k)): v for k, v in h["per_image"].items()}
+        sysd[t] = h
+    out["systemic"] = sysd
+    return out
+
+
+def finish_run(db: Session, case: Case, run: ModelRun, res: dict, actor_id: int, status="completed"):
+    """Record a finished analysis on its run and move the case on (review task, notification, audit)."""
     svc = get_service()
-    try:
-        res = svc.analyze([{"id": i.id, "path": i.path, "laterality": i.laterality,
-                            **({} if i.path else {"bytes": image_bytes(i)})} for i in imgs],
-                          {k: (v if v is not None else float("nan")) for k, v in patient_meta(case.patient).items()})
-        status = "completed"
-    except Exception as e:
-        res, status = {"error": type(e).__name__, "overall": "Model unavailable - manual review"}, "failed"
-    run = ModelRun(tenant_id=case.tenant_id, case_id=case.id, case_version=case.version, image_ids=[i.id for i in imgs],
-                   model_version=res.get("model_version", svc.version), threshold_version=res.get("threshold_version", "-"),
-                   source=res.get("source", svc.mode), status=status, result=res, latency_ms=res.get("latency_ms", 0))
-    db.add(run)
-    db.flush()
+    run.result, run.status = res, status
+    run.model_version = res.get("model_version", svc.version)
+    run.threshold_version = res.get("threshold_version", "-")
+    run.source = res.get("source", svc.mode)
+    run.latency_ms = res.get("latency_ms", 0)
     case.status = "Unable to assess" if res.get("overall") == "Unable to assess" else "HCP review"
-    wf.audit(db, case.tenant_id, case.id, user.id, "model_run",
+    wf.audit(db, case.tenant_id, case.id, actor_id, "model_run",
              f"run #{run.id} [{run.source}] {res.get('overall')} ({run.model_version})", case.version)
+    if status == "completed":
+        timeseries.record_findings(case.tenant_id, res)
     wf.add_task(db, case, "review", f"Review screening result for {case.patient.ref}", case.owner_id,
                 due=wf.DEMO_DUE["review"])
     wf.notify(db, case.owner, f"Screening result ready to review ({case.patient.ref})", f"/cases/{case.id}")
     return run
+
+
+def submit_run(db: Session, case: Case, user: User, imgs=None, job_id=None, id_map=None):
+    """Queue the case's analysis on a slow remote worker; the run stays 'pending' until settle() collects it."""
+    svc = get_service()
+    imgs = imgs if imgs is not None else wf.active_images(db, case)
+    jid = job_id or svc.submit(_case_images(imgs), _case_inputs(case))
+    if not jid:
+        return None
+    run = ModelRun(tenant_id=case.tenant_id, case_id=case.id, case_version=case.version, image_ids=[i.id for i in imgs],
+                   model_version="pending", threshold_version="-", source="live", status="pending",
+                   result={"job_id": jid, "by": user.id, "id_map": id_map or {}, "submitted": now().isoformat()},
+                   latency_ms=0)
+    db.add(run)
+    db.flush()
+    case.status = "Analysing"
+    wf.audit(db, case.tenant_id, case.id, user.id, "model_run_queued", f"run #{run.id} queued on the vision worker",
+             case.version)
+    return run
+
+
+def settle(db: Session, run: ModelRun | None):
+    """Collect a pending remote analysis if it has finished (cheap poll); resubmit if the worker lost it."""
+    if not run or run.status != "pending":
+        return run
+    svc = get_service()
+    if not hasattr(svc, "job"):
+        return run
+    info = dict(run.result or {})
+    st = svc.job(info.get("job_id", ""))
+    case = db.get(Case, run.case_id)
+    if st.get("status") == "done":
+        finish_run(db, case, run, remap_result(st["result"], info.get("id_map")), info.get("by") or case.owner_id)
+        db.commit()
+    elif st.get("status") == "failed":
+        finish_run(db, case, run, {"error": st.get("error"), "overall": "Model unavailable - manual review"},
+                   info.get("by") or case.owner_id, status="failed")
+        db.commit()
+    elif st.get("status") == "lost":                       # worker restarted: queue the same images again
+        imgs = [db.get(Image, i) for i in run.image_ids]
+        jid = svc.submit(_case_images([i for i in imgs if i]), _case_inputs(case))
+        if jid:
+            run.result = {**info, "job_id": jid, "id_map": {}, "resubmitted": now().isoformat()}
+            db.commit()
+    else:
+        run.result = {**info, "progress": {k: st.get(k) for k in ("status", "position", "eta_s", "elapsed_s")}}
+        db.commit()
+    return run
+
+
+def settle_cases(db: Session, case_ids):
+    if not case_ids:
+        return
+    for r in db.scalars(select(ModelRun).where(ModelRun.case_id.in_(list(case_ids)), ModelRun.status == "pending")):
+        settle(db, r)
+
+
+def run_analysis(db: Session, case: Case, user: User) -> ModelRun:
+    imgs = wf.active_images(db, case)
+    svc = get_service()
+    if getattr(svc, "is_async", False):
+        run = submit_run(db, case, user, imgs)
+        if run:
+            return run
+    try:
+        res = svc.analyze(_case_images(imgs), _case_inputs(case))
+        status = "completed"
+    except Exception as e:
+        res, status = {"error": type(e).__name__, "overall": "Model unavailable - manual review"}, "failed"
+    return record_run(db, case, imgs, res, user.id, status)
+
+
+def record_run(db: Session, case: Case, imgs, res: dict, actor_id: int, status="completed") -> ModelRun:
+    run = ModelRun(tenant_id=case.tenant_id, case_id=case.id, case_version=case.version, image_ids=[i.id for i in imgs],
+                   model_version="-", threshold_version="-", source="-", status=status, result={}, latency_ms=0)
+    db.add(run)
+    db.flush()
+    return finish_run(db, case, run, res, actor_id, status)
 
 
 @app.post("/cases/{case_id}/analyze")
@@ -603,7 +708,7 @@ def analyze(case_id: int, user: User = Depends(current_user), db: Session = Depe
 
 
 def latest_run(db, case):
-    return db.scalar(select(ModelRun).where(ModelRun.case_id == case.id).order_by(ModelRun.id.desc()))
+    return settle(db, db.scalar(select(ModelRun).where(ModelRun.case_id == case.id).order_by(ModelRun.id.desc())))
 
 
 # ------------------------------------------------------------------ case page
@@ -729,6 +834,8 @@ def sign_review_core(db: Session, case: Case, user: User, f) -> Review:
     wf.close_tasks(db, case.id, "review")
     wf.audit(db, case.tenant_id, case.id, user.id, "review_signed",
              f"{decision}; next action: {rv.next_action}; sig {sig[:12]}", case.version)
+    anchor.record(db, case, user.id, "review", sig)
+    timeseries.record_workflow(case.tenant_id, "review_signed")
     if decision == "recapture":
         wf.add_task(db, case, "recapture", f"Recapture images for {case.patient.ref}", case.created_by)
     for c, note in sysnotes.items():
@@ -801,6 +908,8 @@ def dispatch_referral(db: Session, user: User, case: Case, review: Review, recip
         return None
     wf.audit(db, case.tenant_id, case.id, user.id, "referral_sent",
              f"#{ref.id} to {recipient.name} ({topic}); package {phash[:12]}", case.version)
+    anchor.record(db, case, user.id, "referral", phash)
+    timeseries.record_workflow(case.tenant_id, "referral_sent")
     wf.add_task(db, case, "acknowledge", f"Acknowledge consultation RL-{ref.id}", recipient.id, ref.id, wf.DEMO_DUE["acknowledge"])
     wf.notify(db, recipient, f"New consultation request RL-{ref.id}", f"/referrals/{ref.id}")
     return ref
@@ -1043,7 +1152,6 @@ def screen_page(request: Request, user: User = Depends(current_user), db: Sessio
 @app.post("/screen", response_class=HTMLResponse)
 async def screen_run(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Analyse newly uploaded photos (by eye), or re-run held ones (token) with changed patient details."""
-    import base64
     form = await request.form()
     uploads = [(eye, f) for eye, key in (("OD", "files_OD"), ("OS", "files_OS"), ("unknown", "files"))
                for f in form.getlist(key) if hasattr(f, "read") and getattr(f, "filename", "")]
@@ -1065,14 +1173,62 @@ async def screen_run(request: Request, user: User = Depends(current_user), db: S
             wf.error(410, "photos_expired", "Those photos are no longer held (kept for 1 hour). Upload them again.")
     details = trylab.parse_details(form)
     svc = get_service()
-    res = svc.analyze([{"id": i, "laterality": eye, "bytes": d} for i, _, d, eye in blobs], trylab.model_inputs(details))
-    uri = lambda b, mt: f"data:{mt};base64," + base64.b64encode(b).decode()
+    images = [{"id": i, "laterality": eye, "bytes": d} for i, _, d, eye in blobs]
+    if getattr(svc, "is_async", False):                   # slow worker (free CPU Space): queue, then poll
+        jid = svc.submit(images, trylab.model_inputs(details))
+        if jid:
+            db.merge(ScreenResult(token=token, tenant_id=user.tenant_id, user_id=user.id, details=details, created_at=now(),
+                                  result={"pending": jid, "patient_ref": form.get("patient_ref", "")}))
+            wf.audit(db, user.tenant_id, None, user.id, "screen", f"{len(blobs)} photo(s) queued on the vision worker")
+            db.commit()
+            return RedirectResponse(f"/screen/result?token={token}", 303)
+    res = svc.analyze(images, trylab.model_inputs(details))
+    return render_screen(request, user, db, token, blobs, res, details, form.get("patient_ref", ""), svc)
+
+
+def _uri(b, mt):
+    import base64
+    return f"data:{mt};base64," + base64.b64encode(b).decode()
+
+
+@app.get("/screen/result", response_class=HTMLResponse)
+def screen_result(request: Request, token: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Queued screening: show progress (page refreshes itself) until the worker returns, then the full result."""
+    sr = db.get(ScreenResult, token)
+    if not sr or sr.user_id != user.id:
+        wf.error(404, "not_found", "Screening not found.")
+    blobs = trylab.load(db, user, token)
+    if not blobs:
+        wf.error(410, "photos_expired", "Those photos are no longer held (kept for 1 hour). Upload them again.")
+    svc = get_service()
+    info = dict(sr.result or {})
+    if "pending" not in info:
+        return render_screen(request, user, db, token, blobs, info, sr.details, info.get("patient_ref", ""), svc)
+    st = svc.job(info["pending"]) if hasattr(svc, "job") else {"status": "unreachable"}
+    if st.get("status") == "done":
+        return render_screen(request, user, db, token, blobs, st["result"], sr.details, info.get("patient_ref", ""), svc)
+    if st.get("status") == "failed":
+        wf.error(502, "analysis_failed", "The vision worker could not analyse these photos. Try again.")
+    if st.get("status") == "lost":                        # worker restarted: queue again
+        jid = svc.submit([{"id": i, "laterality": eye, "bytes": d} for i, _, d, eye in blobs],
+                         trylab.model_inputs(sr.details))
+        if jid:
+            sr.result = {**info, "pending": jid}
+            db.commit()
+        st = {"status": "queued"}
+    return templates.TemplateResponse(request, "screen_pending.html", ctx(
+        request, user, db, active="screen", token=token, st=st, n=len(blobs),
+        photos=[{"src": _uri(thumbnail(d, 360), "image/jpeg"), "eye": eye} for _, _, d, eye in blobs]))
+
+
+def render_screen(request, user, db, token, blobs, res, details, patient_ref, svc):
+    uri = _uri
     results = []
     for i, name, data, eye in blobs:
         r = dict(res["images"].get(str(i)) or res["images"].get(i) or {})
         q = r.get("quality", "unsupported")
         attn = None
-        if res.get("source") == "live" and q in ("assessable", "uncertain", "unassessable"):
+        if res.get("source") == "live" and q in ("assessable", "uncertain", "unassessable") and not getattr(svc, "is_async", False):
             png = svc.explain(data, "quality_poor" if q == "unassessable" else "dr_referable")
             if png:
                 attn = uri(thumbnail(png, 900), "image/jpeg")
@@ -1091,8 +1247,8 @@ async def screen_run(request: Request, user: User = Depends(current_user), db: S
     evidence = trylab.evidence_for(overall, any(r.get("edema_flag") for r in results), snapshot)
     meds = details["medications"]
     personal = personalize.bundle({**res, "overall": overall}, snapshot, meds, with_trials=False)
-    db.merge(ScreenResult(token=token, tenant_id=user.tenant_id, user_id=user.id, result={**res, "overall": overall},
-                          details=details, created_at=now()))
+    db.merge(ScreenResult(token=token, tenant_id=user.tenant_id, user_id=user.id, created_at=now(), details=details,
+                          result={**res, "overall": overall, "patient_ref": patient_ref}))
     wf.audit(db, user.tenant_id, None, user.id, "screen", f"{len(blobs)} photo(s), held 1 hour")
     db.commit()
     eyes_known = any(eye != "unknown" for *_, eye in blobs)
@@ -1100,7 +1256,7 @@ async def screen_run(request: Request, user: User = Depends(current_user), db: S
         request, user, db, active="screen", results=results, res=res, overall=overall, eyes_known=eyes_known,
         thr=res["thresholds"], version=res.get("model_version"), source=res.get("source"),
         latency=res.get("latency_ms", 0), token=token, details=details, systemic=res.get("systemic", {}),
-        snapshot=snapshot, evidence=evidence, patient_ref=form.get("patient_ref", ""),
+        snapshot=snapshot, evidence=evidence, patient_ref=patient_ref,
         options=personal["options"], sponsored=personal["sponsored"], current_alerts=personal["current_alerts"],
         priorities=personal["priorities"],
         n_inputs=sum(v is not None and v != "unknown" for k, v in details.items() if k not in ("conditions", "medications"))))
@@ -1132,16 +1288,29 @@ async def screen_save(request: Request, user: User = Depends(current_user), db: 
     db.add(case)
     db.flush()
     wf.audit(db, user.tenant_id, case.id, user.id, "case_created", f"patient {ref} (from Screen)", 1)
+    saved, id_map = [], {}
     for i, name, data, eye in blobs:
         img = _validate_upload(data)
         sha, path = _store(case, data, img)
-        db.add(Image(tenant_id=case.tenant_id, case_id=case.id, sha256=sha, path=path, laterality=eye,
-                     view="macula-centred", source=case.device, width=img.size[0], height=img.size[1],
-                     uploaded_by=user.id, data=None if path else data))
+        row = Image(tenant_id=case.tenant_id, case_id=case.id, sha256=sha, path=path, laterality=eye,
+                    view="macula-centred", source=case.device, width=img.size[0], height=img.size[1],
+                    uploaded_by=user.id, data=None if path else data)
+        db.add(row)
+        db.flush()
+        saved.append(row)
+        id_map[i] = row.id
     case.status = "Images ready"
     wf.bump_version(db, case, user, f"{len(blobs)} image(s) from Screen")
     db.flush()
-    run_analysis(db, case, user)
+    # reuse the screening's analysis (same photos, same patient details) instead of running the models again
+    sr = db.get(ScreenResult, form.get("token", ""))
+    info = dict(sr.result or {}) if sr and sr.user_id == user.id else {}
+    if info.get("images") and "pending" not in info:
+        record_run(db, case, saved, remap_result(info, id_map), user.id)
+    elif info.get("pending") and getattr(get_service(), "is_async", False):
+        submit_run(db, case, user, saved, job_id=info["pending"], id_map=id_map)
+    else:
+        run_analysis(db, case, user)
     db.commit()
     if user.role == "referring":
         return RedirectResponse(f"/cases/{case.id}/consult?msg=Saved+as+{ref}.+Now+choose+a+specialist+and+send.", 303)
@@ -1154,6 +1323,7 @@ def patients_page(request: Request, q: str = "", user: User = Depends(current_us
     svc = get_service()
     labels = {**SYSTEMIC_LABELS, **COMPOSITE_LABELS}
     cases = visible_cases(db, user)
+    settle_cases(db, [c.id for c in cases])
     if q:
         cases = [c for c in cases if q.lower() in c.patient.ref.lower()]
     latest = {}
@@ -1254,7 +1424,10 @@ def analytics(request: Request, view: str = "model", user: User = Depends(curren
         request, user, db, view=view, active="performance", funnel=[(s, reached[s]) for s in wf.FUNNEL], n_sent=len(refs),
         ack_median=(sorted(lat)[len(lat) // 2] if lat else None), n_ack=len(lat), closed=closed, alt=alt,
         pending=len(refs) - closed - sum(alt.values()), overdue=sum(wf.is_overdue(t.due_at) for t in open_tasks),
-        n_open=len(open_tasks), runs=runs, metrics=svc.metrics, calib=svc.calib, model_version=svc.version))
+        n_open=len(open_tasks), runs=runs, metrics=svc.metrics, calib=svc.calib, model_version=svc.version,
+        trends=timeseries.trends(db, user.tenant_id) if view == "trends" else None,
+        trend_labels={"screened": "Patients screened", "referable_dr": "Referable DR", "macular_edema": "Macular edema",
+                      **SYSTEMIC_LABELS, "review_signed": "Reviews signed", "referral_sent": "Consultations sent"}))
 
 
 # ------------------------------------------------------------------ JSON API (subset of spec §13)
@@ -1300,10 +1473,17 @@ def api_result(case_id: int, user: User = Depends(current_user), db: Session = D
 
 
 # ------------------------------------------------------------------ therapeutics layer (routes_therapy.py)
+from .routes_copilot import router as copilot_router  # noqa: E402
+from .routes_explainer import router as explainer_router  # noqa: E402
 from .routes_therapy import router as therapy_router  # noqa: E402
 from .seed import backfill_medications, ensure_desk  # noqa: E402
 
 app.include_router(therapy_router)
+app.include_router(copilot_router)
+app.include_router(explainer_router)
+if os.environ.get("INSIGHTRX_WARMUP") == "1":       # local installs: load the models in the background at startup
+    import threading
+    threading.Thread(target=get_service, name="model-warmup", daemon=True).start()
 with SessionLocal() as _db:                     # additive demo upgrades for workspaces seeded before this layer
     if _db.query(Tenant).count():
         backfill_medications(_db)
